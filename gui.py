@@ -1,5 +1,5 @@
 import tkinter as tk
-from object_observer import Trackable, Mediator, Observer, EVENT_TYPES
+from trackable import *
 from typing import Dict, Callable
 
 import time
@@ -21,6 +21,7 @@ class ObserverApp(tk.Frame):
         super().__init__()
         self.observer = observer
         self.trackable_attributes = observer.get_trackable_attributes()
+        print(self.trackable_attributes)
 
         self.choices = self.get_trackable_names()
         self.choice = tk.StringVar()
@@ -38,30 +39,34 @@ class ObserverApp(tk.Frame):
             self.hide_info_frame(trackable_name)
 
     def update_info_frame(self, trackable_name, key=None, value=None):
-        if key is not None and value is not None:
-            self.info_frames[trackable_name][key].delete(0, tk.END)
-            self.info_frames[trackable_name][key].insert(0, value)
+        if key is None:
+            for widget in self.info_frames[trackable_name]["frame"].winfo_children():
+                widget.destroy()
+            self.create_info_frame(trackable_name)
             return
 
-        print("destroying info frame")
-        for widget in self.info_frames[trackable_name]["frame"].winfo_children():
-            widget.destroy()
-        self.create_info_frame(trackable_name)
+        self.info_frames[trackable_name][key].delete(0, tk.END)
+        self.info_frames[trackable_name][key].insert(0, value)
+
+
+
 
     def create_info_frame(self, trackable_name, attributes=None):
         attributes = attributes or self.trackable_attributes[trackable_name]
         frame = tk.Frame(self, name=trackable_name, borderwidth=1, relief=tk.RAISED)
         self.info_frames[trackable_name] = {}
         self.info_frames[trackable_name]["frame"] = frame
+        cols = 4
         for i, (key, value) in enumerate(attributes.items()):
-            cols = 4
             self.info_frames[trackable_name][f"{key}_label"] = tk.Label(frame, text=key)
             self.info_frames[trackable_name][key] = tk.Entry(frame)
             self.info_frames[trackable_name][key].insert(0, str(value))
-            self.info_frames[trackable_name][f"{key}_label"].grid(column=i%cols, row=i//cols * 2)
-            self.info_frames[trackable_name][key].grid(column=i%cols, row=i//cols * 2 + 1)
+            self.info_frames[trackable_name][f"{key}_label"].grid(column=i % cols, row=i // cols * 2)
+            self.info_frames[trackable_name][key].grid(column=i % cols, row=i // cols * 2 + 1)
 
     def display_info_frame(self, trackable_name):
+        if trackable_name not in self.info_frames:
+            return
         self.info_frames[trackable_name]["frame"].grid(row=1, column=0)
 
     def hide_info_frame(self, trackable_name):
@@ -77,7 +82,6 @@ class ObserverApp(tk.Frame):
         if self.last_choice:
             self.hide_info_frame(self.last_choice)
         self.display_info_frame(name)
-        print(f"last choice: {self.last_choice}, current choice: {name}")
         self.last_choice = name
 
     def get_trackable_names(self):
@@ -88,6 +92,7 @@ class ObserverApp(tk.Frame):
 
     def update_widgets(self, trackable_name, key, value, type):
         if type == EVENT_TYPES.TRACKABLE_ADDED:
+            print(f"trackable added: {trackable_name}")
             self.trackable_attributes[trackable_name] = value[0]
             self.choices = self.get_trackable_names()
             self.create_info_frame(trackable_name)
@@ -95,6 +100,8 @@ class ObserverApp(tk.Frame):
             self.create_dropdown()
 
         elif type == EVENT_TYPES.SET_ATTRIBUTE:
+            print(f"set attribute: {trackable_name}, {key}, {value}")
+            self.trackable_attributes[trackable_name][key] = value
             if key not in self.info_frames[trackable_name].keys():
                 self.update_info_frame(trackable_name)
                 self.display_info_frame(self.choice.get())
@@ -102,19 +109,20 @@ class ObserverApp(tk.Frame):
             else:
                 self.update_info_frame(trackable_name, key, value)
 
-            self.trackable_attributes[trackable_name][key] = value
 
 
 
-
+@track_vars("test_var", "timer", "timer2")
 def main():
+    start_logging()
     root = tk.Tk()
     # notebook = ttk.Notebook(root)
     # main_tab = ttk.Frame(notebook)
 
-    t = Trackable("test")
+    t = Trackable(None, "test")
     m = Mediator()
     m.add_trackable(t)
+    m.add_trackable(global_tracker)
     t.x = 0
     t.y = 100
 
@@ -144,15 +152,23 @@ def main():
             trackables = thread2_observer.get_trackable_attributes()
             for trackable, attributes in trackables.items():
                 for key, value in attributes.items():
+                    print(key, value)
+                    print("key:", "timer" in key)
+                    print("timer in timer2:", "timer" in "timer2")
                     if "timer" in key:
+                        print("incrementing")
                         thread2_observer.set_attribute(trackable, key, value + 1)
-            time.sleep(0.05)
+            time.sleep(5)
 
     thread = threading.Thread(target=input_thread)
     thread.start()
+    test_var = 100
+    # timer = 0
+    # timer2 = 100
 
     thread2 = threading.Thread(target=increment_thread)
     thread2.start()
+
 
     app.pack()
     # notebook.pack()

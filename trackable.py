@@ -7,6 +7,10 @@ import threading
 import re
 import logging
 
+import inspect, textwrap
+
+global_trackable_declared = False
+
 
 class EVENT_TYPES:
     SET_ATTRIBUTE = "set_attribute"
@@ -17,6 +21,7 @@ class EVENT_TYPES:
 
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 # todo remove observer class, just use mediator, with collection of callbacks
@@ -36,6 +41,9 @@ logger = logging.getLogger(__name__)
 # todo add method to automatically detect any trackables defined in file and add them to the mediator
 
 # todo research metaclasses and how to track number of method calls from decorators
+# ~~use descriptors to track attributes of primitive types and collections~~ - cant use descriptors for global variables
+
+# todo create a global trackable, that tracks global variables - can then use descriptors to track attributes of global
 
 
 class Trackable:
@@ -45,6 +53,7 @@ class Trackable:
     UPDATE_INTERVAL = 1 / UPDATES_PER_SECOND
 
     def __init__(self, obj=None, name: str = None):
+        logger.debug(f"Trackable.__init__({obj}, {name})")
         if obj is not None:
             original_class = obj.__class__
             merged_class = None
@@ -56,7 +65,7 @@ class Trackable:
             # Inherit special methods, attributes and methods from original class of obj
             self.__class__ = merged_class or self.dynamic_class_cache[original_class]
             self.__dict__.update(obj.__dict__)
-            print(f"Trackable.__init__ {self.__class__} {self.__dict__})")
+            logger.debug(f"Trackable.__init__ {self.__class__} {self.__dict__})")
 
         self._trackable_attributes = {}
         self._trackable_methods = {}
@@ -67,32 +76,22 @@ class Trackable:
         self.name = name or self.__class__.__name__
         self.last_update: Dict[str, float] = {}
 
+        self._is_timed = False  # temporary fix to allow immediate consecutive updates (will be unneccessary when using queue)
+
     def __setattr__(self, key, value, silent=False):
-        # if key.startswith("_"):
-        #     super.__setattr__(self, key, value)
-        #     return
-        #
-        # self._trackable_attributes[key] = value
-
         super.__setattr__(self, key, value)
-        if silent or key.startswith("_") or key == "name" or key == "particles":
+        if silent or key.startswith("_") or key == "name":
             return
 
-        if time.time() - self.last_update.get(key, 0) < self.UPDATE_INTERVAL:
+        if time.time() - self.last_update.get(key, 0) < self.UPDATE_INTERVAL and self._is_timed:
             return
 
-        if not isinstance(value, (int, float, str)):
+        if not (isinstance(value, (int, float, str, bool)) or value is None):
             return
 
         logger.debug(f"{self} setting {key} = {value}")
         self.notify_mediators(key, value, EVENT_TYPES.SET_ATTRIBUTE)
         self.last_update[key] = time.time()
-
-    # def __getattr__(self, item):
-    # if item.startswith("_"):
-    #     return super.__getattr__(self, item)
-    #
-    # return self._trackable_attributes.get(item)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.name})"
@@ -127,6 +126,10 @@ class Trackable:
         else:
             raise AttributeError(f"{self} has no attribute {method_name}")
 
+    def declare_variables(self, *variables):
+        for variable in variables:
+            self.__setattr__(variable, None, silent=True)
+
     @staticmethod
     def notify_method_call(func):
 
@@ -146,12 +149,8 @@ class Trackable:
 
         return wrapper
 
-    @notify_method_call
-    def test(self, depth):
-        # print(f"test called with depth {depth}")
-        logger.debug(f"test called with depth {depth}")
-        if depth > 0:
-            self.test(depth - 1)
+
+global_tracker = Trackable(None, "global_tracker")  # global tracker for variables that are not part of a class
 
 
 class Mediator:
@@ -159,6 +158,11 @@ class Mediator:
         self._trackables: Dict[str, Trackable] = {}
         self._observers: List[Observer] = []
         self._lock = threading.RLock()
+
+        # # if the global_tracker has been added to, add it to the mediator
+        # print("global_tracker", global_trackable_declared)
+        # if global_trackable_declared:
+        #     self.add_trackable(global_tracker)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({len(self._trackables)} trackables, {len(self._observers)} observers)"
@@ -179,7 +183,7 @@ class Mediator:
 
     def remove_trackable(self, trackable: Trackable):
         with self._lock:
-            self._trackables.pop(trackable._name)
+            self._trackables.pop(trackable.name)
             trackable.remove_mediator(self)
 
     def add_observer(self, observer):
@@ -209,7 +213,7 @@ class Mediator:
         trackable = self._trackables[trackable_name]
         with trackable.get_lock():
             # print(f"invoking {trackable_name}.{method_name}({args}, {kwargs})")
-            logger.debug(f"invoking {trackable_name}.{method_name}({args}, {kwargs})")
+            logger.debug(f"\tinvoking {trackable_name}.{method_name}({args}, {kwargs})")
             trackable.invoke(method_name, *args, **kwargs)
 
     def get_all_attributes(self):
@@ -236,7 +240,7 @@ class Observer:
 
     def notify(self, trackable_name, key, value, type):
         # print(f"observer: {trackable_name}.{key} = {value} ({type})")
-        logger.debug(f"observer: {trackable_name}.{key} = {value} ({type})")
+        logger.debug(f"\t\tobserver: {trackable_name}.{key} = {value} ({type})")
         if self.notify_callback:
             self.notify_callback(trackable_name, key, value, type)
 
@@ -252,28 +256,98 @@ class Observer:
         return self.mediator.get_all_attributes()[trackable_name]
 
 
+def track_vars_custom(trackable: Trackable, *to_track):
+    """Decorator to track variables in a function.
+        Adds the variables to the trackable object and macros the variable to refer to the trackable's attribute
+         instead.
+        WARNING: This will break code that has string literals used for logic that contain the variable names."""
+
+    def replace_vars(source):
+        """Replace all references within the source with another"""
+        for var in to_track:
+            source = re.sub(rf"(?<!['\"])({var})(?!['\"])", f"{trackable.name}.{var}", source)
+
+            # regex to match any occurrences of the variable name that are not within quotes
+            # not a trivial problem (impossible using regex?), so just replace all occurrences of the variable name
+            # if they're not directly next to quotes:
+            # source = re.sub(rf"(?<!['\"])({var})(?!['\"])", f"{trackable.name}.{var}", source)
+            # todo use a macro library to replace the variables instead of regex, or create own macro function
+
+        return source
+
+    def decorator(func):
+        global global_trackable_declared
+
+        trackable.declare_variables(*to_track)
+        global_trackable_declared = True
+
+        source = inspect.getsourcelines(func)[0][1:]  # exclude the decorator line (avoid recursion)
+        source = textwrap.dedent("".join(source))
+
+        source = replace_vars(source)
+
+        print(source)
+
+        wrapper = compile(source, f"{func.__name__}.py", "exec")
+        namespace = {}
+        exec(wrapper, func.__globals__, namespace)
+
+        return namespace[func.__name__]
+
+    return decorator
+
+
+def track_vars(*to_track):
+    """Decorator to track variables in a function.
+        Adds the variables to the global_tracker object and macros the variable to refer to the global_tracker's
+         attribute instead.
+        WARNING: This will break code that has string literals used for logic that contain the variable names."""
+    return track_vars_custom(global_tracker, *to_track)
+
+
+def start_logging():
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(console_handler)
+
+
+@track_vars("test", "test2")
 def main():
+    # set up logging
+    start_logging()
+
     window = tkinter.Tk()
 
-    track = Trackable(None, "test")
-    track2 = Trackable(None, "test")
-    track3 = Trackable(None, "test")
+    # track = Trackable(None, "test")
+    # track2 = Trackable(None, "test")
+    # track3 = Trackable(None, "test")
+    #
+    # mediator = Mediator()
+    #
+    # observer = Observer(mediator)
+    # observer2 = Observer(mediator)
+    #
+    # mediator.add_trackable(track)
+    # mediator.add_trackable(track2)
+    # mediator.add_trackable(track3)
+    #
+    # track.x = 0
+    # track.x += 1
+    # track2.x = 1
+    #
+    # mediator.set_attribute("test", "x", 2)
+    # mediator.invoke_method("test", "__setattr__", args=("x", 3))
 
     mediator = Mediator()
-
     observer = Observer(mediator)
-    observer2 = Observer(mediator)
 
-    mediator.add_trackable(track)
-    mediator.add_trackable(track2)
-    mediator.add_trackable(track3)
-
-    track.x = 0
-    track.x += 1
-    track2.x = 1
-
-    mediator.set_attribute("test", "x", 2)
-    mediator.invoke_method("test", "__setattr__", args=("x", 3))
+    test = "hello"
+    test += " world"
+    test2 = 100
+    test2 += 1
+    test2 += 1
+    test2 = len(test)
 
     window.mainloop()
 
