@@ -1,13 +1,14 @@
 from __future__ import annotations
-import tkinter
-import time
 
-from typing import Dict, List, Callable
-import threading
-import re
+import inspect
 import logging
-
-import inspect, textwrap
+import re
+import textwrap
+import threading
+import time
+import tkinter
+import queue
+from typing import Dict, List, Callable
 
 global_trackable_declared = False
 
@@ -25,25 +26,18 @@ logger.setLevel(logging.DEBUG)
 
 
 # todo remove observer class, just use mediator, with collection of callbacks
-# todo add supported primitive types to trackable
 # todo use queue instead of lock for mediators - most time is probably spent waiting for lock
 # todo add support for tracking methods
-# todo add ability to track primitive types:
-#   - maybe create a trackable and add each primitive to its dict and use inspect to replace references to primitive
-#   with a reference to that trackable's attribute
-#   - monkey patch, instead of using inspect
 # todo add ability to track collections - recursively check if each item is trackable
 # todo add tabs to tkinter gui
+# todo add support for graphs in tkinter gui using library like matplotlib
 
 # todo check if its even necessary to use dynamic class inheritance, instead of using composition and monkey patching
 #   - for inheriting special methods
 
-# todo add method to automatically detect any trackables defined in file and add them to the mediator
 
 # todo research metaclasses and how to track number of method calls from decorators
-# ~~use descriptors to track attributes of primitive types and collections~~ - cant use descriptors for global variables
-
-# todo create a global trackable, that tracks global variables - can then use descriptors to track attributes of global
+# todo research dataclasses
 
 
 class Trackable:
@@ -73,8 +67,8 @@ class Trackable:
         self._mediators = []
         self._lock = threading.Lock()
 
-        self.name = name or self.__class__.__name__
-        self.last_update: Dict[str, float] = {}
+        self._name = name or self.__class__.__name__
+        self._last_update: Dict[str, float] = {}
 
         self._is_timed = False  # temporary fix to allow immediate consecutive updates (will be unneccessary when using queue)
 
@@ -83,7 +77,7 @@ class Trackable:
         if silent or key.startswith("_") or key == "name":
             return
 
-        if time.time() - self.last_update.get(key, 0) < self.UPDATE_INTERVAL and self._is_timed:
+        if time.time() - self._last_update.get(key, 0) < self.UPDATE_INTERVAL and self._is_timed:
             return
 
         if not (isinstance(value, (int, float, str, bool)) or value is None):
@@ -91,10 +85,10 @@ class Trackable:
 
         logger.debug(f"{self} setting {key} = {value}")
         self.notify_mediators(key, value, EVENT_TYPES.SET_ATTRIBUTE)
-        self.last_update[key] = time.time()
+        self._last_update[key] = time.time()
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({self.name})"
+        return f"{self.__class__.__name__}({self._name})"
 
     def get_lock(self):
         return self._lock
@@ -102,7 +96,7 @@ class Trackable:
     def add_mediator(self, mediator):
         self._mediators.append(mediator)
 
-        mediator.notify(self.name, self.name, [self.get_trackable_attributes(), self.get_trackable_methods()],
+        mediator.notify(self._name, self._name, [self.get_trackable_attributes(), self.get_trackable_methods()],
                         EVENT_TYPES.TRACKABLE_ADDED)
 
     def remove_mediator(self, mediator):
@@ -110,11 +104,12 @@ class Trackable:
 
     def notify_mediators(self, key, value, type):
         for mediator in self._mediators:
-            logger.debug(f"notifying {mediator} of {self.name}.{key} = {value}")
-            mediator.notify(self.name, key, value, type)
+            logger.debug(f"notifying {mediator} of {self._name}.{key} = {value}")
+            mediator.notify(self._name, key, value, type)
 
     def get_trackable_attributes(self):
-        return self._trackable_attributes
+        # returns self.__dict__ except for private attributes
+        return {key: value for key, value in self.__dict__.items() if not key.startswith("_")}
 
     def get_trackable_methods(self):
         return self._trackable_methods
@@ -159,31 +154,34 @@ class Mediator:
         self._observers: List[Observer] = []
         self._lock = threading.RLock()
 
-        # # if the global_tracker has been added to, add it to the mediator
-        # print("global_tracker", global_trackable_declared)
-        # if global_trackable_declared:
-        #     self.add_trackable(global_tracker)
+        self._queue = queue.Queue()
+        self._using_queue = True  # temporary, to compare performance of queue vs lock
+
+        if global_trackable_declared:
+            self.add_trackable(global_tracker)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({len(self._trackables)} trackables, {len(self._observers)} observers)"
 
     def add_trackable(self, trackable: Trackable):
         with self._lock and trackable.get_lock():
-            new_name = trackable.name
+            new_name = trackable._name
             while new_name in self._trackables:
                 if re.search(r"(\d+)$", new_name):
                     new_name = re.sub(r"(\d+)$", lambda m: str(int(m.group(1)) + 1), new_name)
                 else:
                     new_name += "2"
 
-            trackable.name = new_name
+            trackable._name = new_name
 
             self._trackables[new_name] = trackable
             trackable.add_mediator(self)
+        return
+
 
     def remove_trackable(self, trackable: Trackable):
         with self._lock:
-            self._trackables.pop(trackable.name)
+            self._trackables.pop(trackable._name)
             trackable.remove_mediator(self)
 
     def add_observer(self, observer):
@@ -196,15 +194,20 @@ class Mediator:
 
     def notify(self, trackable_name, key, value, type):
         """Notify observers of a change to a trackable."""
+        logger.debug(f"notifying observers of {trackable_name}.{key} = {value}, await lock")
         with self._lock:
+            logger.debug(f"notifying observers of {trackable_name}.{key} = {value}, got lock")
             for observer in self._observers:
                 observer.notify(trackable_name, key, value, type)
 
-    def set_attribute(self, trackable_name, key, value):
+    def set_attribute(self, trackable_name, key, value, silent=False):
         """Set an attribute on a trackable and notify observers."""
         trackable = self._trackables[trackable_name]
+        logger.debug(f"setting {trackable_name}.{key} = {value}, await lock")
         with self._lock:
-            trackable.__setattr__(key, value)
+            logger.debug(f"setting {trackable_name}.{key} = {value}, got lock")
+
+            trackable.__setattr__(key, value, silent=silent)
 
     def invoke_method(self, trackable_name, method_name, args=None, kwargs=None):
         """Invoke a method on a trackable and notify observers."""
@@ -240,12 +243,15 @@ class Observer:
 
     def notify(self, trackable_name, key, value, type):
         # print(f"observer: {trackable_name}.{key} = {value} ({type})")
-        logger.debug(f"\t\tobserver: {trackable_name}.{key} = {value} ({type})")
+        logger.debug(f"\t\tobserver invoking callback: {trackable_name}.{key} = {value} ({type})")
         if self.notify_callback:
             self.notify_callback(trackable_name, key, value, type)
 
-    def set_attribute(self, trackable_name, key, value):
-        self.mediator.set_attribute(trackable_name, key, value)
+    def set_trackable_attribute(self, trackable_name, key, value, silent=False):
+        self.mediator.set_attribute(trackable_name, key, value, silent)
+
+    def get_trackable_attribute(self, trackable_name, key):
+        return self.mediator.get_all_attributes()[trackable_name][key]
 
     def invoke_method(self, trackable_name, method_name, args=None, kwargs=None):
         self.mediator.invoke_method(trackable_name, method_name, args, kwargs)
@@ -265,13 +271,14 @@ def track_vars_custom(trackable: Trackable, *to_track):
     def replace_vars(source):
         """Replace all references within the source with another"""
         for var in to_track:
-            source = re.sub(rf"(?<!['\"])({var})(?!['\"])", f"{trackable.name}.{var}", source)
+            source = re.sub(rf"(?<!['\"])(\b{var}\b)(?!['\"])", f"{trackable._name}.{var}", source)
 
             # regex to match any occurrences of the variable name that are not within quotes
             # not a trivial problem (impossible using regex?), so just replace all occurrences of the variable name
             # if they're not directly next to quotes:
             # source = re.sub(rf"(?<!['\"])({var})(?!['\"])", f"{trackable.name}.{var}", source)
             # todo use a macro library to replace the variables instead of regex, or create own macro function
+            # use ast to parse the source, and get the indices of all string literals, ignoring any occurrences that are
 
         return source
 
@@ -312,7 +319,6 @@ def start_logging():
     logger.addHandler(console_handler)
 
 
-@track_vars("test", "test2")
 def main():
     # set up logging
     start_logging()
