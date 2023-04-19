@@ -1,9 +1,6 @@
-import threading
-import time
-import tkinter as tk
-
-from trackable import *
 from gui_elements import *
+from trackable import *
+import tkinter as tk
 
 
 class ObserverApp(tk.Frame):
@@ -11,15 +8,16 @@ class ObserverApp(tk.Frame):
 
     def __init__(self, observer: Observer, master=None):
         super().__init__()
+        self.choice = tk.StringVar()
+        self.last_choice = None
+        self.options = None
         self.observer = observer
         observer.notify_callback = self.update_widgets
         self.pages: Dict[str, TrackableFrame] = dict()
         self.initialize_elements()
 
-        self.choice = tk.StringVar()
-        self.last_choice = None
-        self.options = tk.OptionMenu(self, self.choice, *self.pages.keys(), command=self.change_page)
-        self.options.grid(row=0, column=0)
+
+        self.update_options()
 
     def __repr__(self):
         return f"ObserverApp(Trackables: {self.pages.values()})"
@@ -28,6 +26,12 @@ class ObserverApp(tk.Frame):
         """Adds a trackable page to the app"""
         if trackable_name not in self.pages:
             self.pages[trackable_name] = TrackableFrame(trackable_name, self.observer, self)
+        self.update_options()
+
+    def update_options(self):
+        """Updates the options menu to match the trackable objects in the app"""
+        self.options = tk.OptionMenu(self, self.choice, *self.pages.keys(), command=self.change_page)
+        self.options.grid(row=0, column=0)
 
     def initialize_elements(self):
         """If trackables are added before the app is initialized, this will add them to the app"""
@@ -40,8 +44,8 @@ class ObserverApp(tk.Frame):
             self.pages[trackable_name].update_value(key, value)
         elif event_type == EVENT_TYPES.TRACKABLE_ADDED:
             # todo pass attributes into children, see if its faster than getting them within each child
-            if not self.pages.get(trackable_name):
-                self.add_trackable(trackable_name)
+            print(f"Adding {trackable_name} to {self.pages.keys()}")
+            self.add_trackable(trackable_name)
 
     def change_page(self, trackable_name):
         """Changes the page to the one specified by trackable_name"""
@@ -52,9 +56,9 @@ class ObserverApp(tk.Frame):
         self.last_choice = trackable_name
 
 
-@track_vars("test_var", "timer", "timer2")
+#@track_vars("test_var", "timer", "timer2", "test_2")
 def main():
-    start_logging()
+    #start_logging()
     root = tk.Tk()
     # notebook = ttk.Notebook(root)
     # main_tab = ttk.Frame(notebook)
@@ -100,8 +104,10 @@ def main():
     thread = threading.Thread(target=input_thread)
     thread.start()
     test_var = 100
+    test_2 = 30
+
+    # timer2 = 0
     # timer = 0
-    # timer2 = 100
 
     thread2 = threading.Thread(target=increment_thread)
     thread2.start()

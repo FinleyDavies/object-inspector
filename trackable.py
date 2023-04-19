@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import inspect
 import logging
+import queue
 import re
 import textwrap
 import threading
 import time
 import tkinter
-import queue
 from typing import Dict, List, Callable
 
 global_trackable_declared = False
@@ -29,8 +29,8 @@ logger.setLevel(logging.DEBUG)
 # todo use queue instead of lock for mediators - most time is probably spent waiting for lock
 # todo add support for tracking methods
 # todo add ability to track collections - recursively check if each item is trackable
-# todo add tabs to tkinter gui
-# todo add support for graphs in tkinter gui using library like matplotlib
+# todo add range constraint to float/int trackable
+
 
 # todo check if its even necessary to use dynamic class inheritance, instead of using composition and monkey patching
 #   - for inheriting special methods
@@ -39,11 +39,21 @@ logger.setLevel(logging.DEBUG)
 # todo research metaclasses and how to track number of method calls from decorators
 # todo research dataclasses
 
+# GUI:
+
+# todo add support for graphs in tkinter gui using library like matplotlib
+# todo add tabs to tkinter gui
+# todo prevent trackable from being updated if its gui element is being interacted with
+# todo dynamic range for float/int sliders
+
+# todo add support for custom object ui element - pygame vectors, surfaces etc
+# todo add ui element for trackable objeect within another trackable object
+
 
 class Trackable:
     dynamic_class_cache = {}
 
-    UPDATES_PER_SECOND = 20
+    UPDATES_PER_SECOND = 5
     UPDATE_INTERVAL = 1 / UPDATES_PER_SECOND
 
     def __init__(self, obj=None, name: str = None):
@@ -157,6 +167,7 @@ class Mediator:
         self._queue = queue.Queue()
         self._using_queue = True  # temporary, to compare performance of queue vs lock
 
+
         if global_trackable_declared:
             self.add_trackable(global_tracker)
 
@@ -164,7 +175,7 @@ class Mediator:
         return f"{self.__class__.__name__}({len(self._trackables)} trackables, {len(self._observers)} observers)"
 
     def add_trackable(self, trackable: Trackable):
-        with self._lock and trackable.get_lock():
+        with self._lock:
             new_name = trackable._name
             while new_name in self._trackables:
                 if re.search(r"(\d+)$", new_name):
@@ -176,7 +187,9 @@ class Mediator:
 
             self._trackables[new_name] = trackable
             trackable.add_mediator(self)
-        return
+
+        # queues:
+        # self._queue.put((self.add_trackable, trackable))
 
 
     def remove_trackable(self, trackable: Trackable):
@@ -204,7 +217,7 @@ class Mediator:
         """Set an attribute on a trackable and notify observers."""
         trackable = self._trackables[trackable_name]
         logger.debug(f"setting {trackable_name}.{key} = {value}, await lock")
-        with self._lock:
+        with self._lock and trackable.get_lock():
             logger.debug(f"setting {trackable_name}.{key} = {value}, got lock")
 
             trackable.__setattr__(key, value, silent=silent)
@@ -214,7 +227,7 @@ class Mediator:
         args = args or []
         kwargs = kwargs or {}
         trackable = self._trackables[trackable_name]
-        with trackable.get_lock():
+        with self._lock and trackable.get_lock():
             # print(f"invoking {trackable_name}.{method_name}({args}, {kwargs})")
             logger.debug(f"\tinvoking {trackable_name}.{method_name}({args}, {kwargs})")
             trackable.invoke(method_name, *args, **kwargs)
@@ -283,10 +296,10 @@ def track_vars_custom(trackable: Trackable, *to_track):
         return source
 
     def decorator(func):
-        global global_trackable_declared
-
+        # todo check each to_track to see if its a primitive, or object and either add it to the trackable or
+        #  create a new trackable for it
         trackable.declare_variables(*to_track)
-        global_trackable_declared = True
+
 
         source = inspect.getsourcelines(func)[0][1:]  # exclude the decorator line (avoid recursion)
         source = textwrap.dedent("".join(source))
@@ -309,6 +322,8 @@ def track_vars(*to_track):
         Adds the variables to the global_tracker object and macros the variable to refer to the global_tracker's
          attribute instead.
         WARNING: This will break code that has string literals used for logic that contain the variable names."""
+    global global_trackable_declared
+    global_trackable_declared = True
     return track_vars_custom(global_tracker, *to_track)
 
 

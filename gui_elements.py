@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
-from trackable import Observer
-
 from typing import List, Dict
+
+from trackable import Observer
 
 
 class GuiElement(ttk.Frame):
@@ -38,13 +38,13 @@ class GuiElement(ttk.Frame):
         if not self.trace_enabled:
             return
         self.trace_enabled = False
-        #self.widget_value.trace_vdelete("w", self.write_callback.__name__)
+        # self.widget_value.trace_vdelete("w", self.write_callback.__name__)
 
     def enable_trace(self):
         if self.trace_enabled:
             return
         self.trace_enabled = True
-        #self.widget_value.trace_add("write", self.write_callback)
+        # self.widget_value.trace_add("write", self.write_callback)
 
     def create_widgets(self):
         for widget in self.winfo_children():
@@ -54,7 +54,7 @@ class GuiElement(ttk.Frame):
         widgets.append(tk.Label(self, text=self.attribute_name))
         return widgets
 
-    def update_value(self, new_value):
+    def update_widget_value(self, new_value):
         self.disable_trace()
         self.widget_value.set(new_value)
         self.enable_trace()
@@ -62,7 +62,10 @@ class GuiElement(ttk.Frame):
     def write_callback(self, *args):
         if not self.trace_enabled:
             return
-        self.attribute_value = self.widget_value.get()
+        self.update_attribute_value(self.widget_value.get())
+
+    def update_attribute_value(self, new_value):
+        self.attribute_value = new_value
 
     def button_callback(self):
         pass
@@ -71,12 +74,8 @@ class GuiElement(ttk.Frame):
 class GuiElementBool(GuiElement):
     def create_widgets(self):
         widgets = super().create_widgets()
-        widgets.append(tk.Checkbutton(self, variable=self.attribute_value))
+        widgets.append(tk.Checkbutton(self, variable=self.widget_value))
         return widgets
-
-    def update_value(self, new_value):
-        super().update_value(new_value)
-        self.widgets[1].select()
 
 
 class GuiElementStr(GuiElement):
@@ -85,37 +84,43 @@ class GuiElementStr(GuiElement):
         widgets.append(tk.Entry(self, textvariable=self.attribute_value))
         return widgets
 
-    def update_value(self, new_value):
-        super().update_value(new_value)
-        self.widgets[1].delete(0, tk.END)
-        self.widgets[1].insert(0, new_value)
-
 
 class GuiElementInt(GuiElement):
+    def __init__(self, trackable_name, attribute_name, observer: Observer, master=None):
+        super().__init__(trackable_name, attribute_name, observer, tk.DoubleVar, master)
+        self.min, self.max = 0, 10
+        self.sign = 1
+
     def create_widgets(self):
         widgets = super().create_widgets()
         widgets.append(tk.Entry(self, textvariable=self.widget_value))
-        widgets.append(tk.Scale(self, orient=tk.HORIZONTAL, variable=self.widget_value))
+        widgets.append(tk.Scale(self, orient=tk.HORIZONTAL, variable=self.widget_value, to=10))
+        widgets.append(tk.Button(self, text="+/-", command=self.toggle_sign))
         return widgets
 
-    def update_value(self, new_value):
-        super().update_value(new_value)
-        pass
-        # print(f"updating value to {new_value}")
-        # print(tk.END)
-        # print(f"widgets: {self.widgets}")
-        # super().update_value(new_value)
-        # self.widgets[1].delete(0, tk.END)
-        # self.widgets[1].insert(0, new_value)
-        # self.widgets[2].set(new_value)
+    def set_range(self, min, max):
+        self.min, self.max = min, max
+        self.widgets[2].config(from_=min, to=max)
+
+    def update_widget_value(self, new_value):
+        self.disable_trace()
+        self.widget_value.set(abs(round(new_value, 2)))
+        self.set_range(0, max(new_value, self.max))
+        self.enable_trace()
+
+    def toggle_sign(self):
+        self.sign *= -1
+        self.update_attribute_value(self.widget_value.get())
+
+    def update_attribute_value(self, new_value):
+        self.attribute_value = new_value * self.sign
 
 
-class GuiElementFloat(GuiElement):
-    def create_widgets(self):
-        widgets = super().create_widgets()
-        widgets.append(tk.Entry(self, textvariable=self.attribute_value))
-        widgets.append(tk.Scale(self, orient=tk.HORIZONTAL, variable=self.attribute_value))
-        return widgets
+class GuiElementFloat(GuiElementInt):
+    pass
+
+
+
 
 
 class GuiElementList(GuiElement):
@@ -158,10 +163,10 @@ class GuiElementNone(GuiElement):
         widgets.append(tk.Label(self, text="None"))
         return widgets
 
-    def update_value(self, new_value):
+    def update_widget_value(self, new_value):
         # set self to new instance of GuiElement, using the new value
-        super().update_value(new_value)
-        self = GuiElementFactory.create(self.trackable_name, self.attribute_name, self.observer, self.master)
+        super().update_widget_value(new_value)
+        # self = GuiElementFactory.create(self.trackable_name, self.attribute_name, self.observer, self.master)
 
 
 class GuiElementFactory:
@@ -177,15 +182,15 @@ class GuiElementFactory:
         elif attribute_type == str:
             return GuiElementStr(trackable_name, attribute_name, observer, tk.StringVar, master)
         elif attribute_type == int:
-            return GuiElementInt(trackable_name, attribute_name, observer, tk.IntVar, master)
+            return GuiElementInt(trackable_name, attribute_name, observer, master)
         elif attribute_type == float:
-            return GuiElementFloat(trackable_name, attribute_name, observer, tk.DoubleVar, master)
-        elif attribute_type == list:
-            return GuiElementList(trackable_name, attribute_name, observer, master=master)
-        elif attribute_type == dict:
-            return GuiElementDict(trackable_name, attribute_name, observer, master=master)
-        elif attribute_type == callable:
-            return GuiElementCallable(trackable_name, attribute_name, observer, master=master)
+            return GuiElementFloat(trackable_name, attribute_name, observer, master)
+        # elif attribute_type == list:
+        #     return GuiElementList(trackable_name, attribute_name, observer, master=master)
+        # elif attribute_type == dict:
+        #     return GuiElementDict(trackable_name, attribute_name, observer, master=master)
+        # elif attribute_type == callable:
+        #     return GuiElementCallable(trackable_name, attribute_name, observer, master=master)
         elif attribute_type == type(None):
             return GuiElementNone(trackable_name, attribute_name, observer, master=master)
 
@@ -225,22 +230,27 @@ class TrackableFrame(ttk.Frame):
             self.add_element(attribute_name)
 
     def add_element(self, attribute_name):
+        print(f"Adding {attribute_name}, to {self.trackable_name}, elements: {self.gui_elements}")
         gui_element = GuiElementFactory.create(self.trackable_name, attribute_name, self.observer, self)
         gui_element.grid(row=self.n_elements // self.columns, column=self.n_elements % self.columns)
 
         self.gui_elements[attribute_name] = gui_element
+        print(f"Added {attribute_name}, to {self.trackable_name}, elements: {self.gui_elements}")
 
     def remove_element(self, attribute_name):
+        print(f"Removing {attribute_name}, from {self.trackable_name}, elements: {self.gui_elements}")
         gui_element = self.gui_elements[attribute_name]
         gui_element.destroy()
         del self.gui_elements[attribute_name]
+        print(f"Removed {attribute_name}, from {self.trackable_name}, elements: {self.gui_elements}")
 
     def update_value(self, attribute_name, new_value):
         if attribute_name in self.gui_elements:
             if isinstance(self.gui_elements[attribute_name], GuiElementNone):
                 self.remove_element(attribute_name)
                 self.add_element(attribute_name)  # if the attribute was previously None, overwrite it
+                self.create_widgets()
 
-            self.gui_elements[attribute_name].update_value(new_value)
+            self.gui_elements[attribute_name].update_widget_value(new_value)
         else:
             self.add_element(attribute_name)
