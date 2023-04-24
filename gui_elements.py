@@ -88,13 +88,13 @@ class GuiElementStr(GuiElement):
 class GuiElementInt(GuiElement):
     def __init__(self, trackable_name, attribute_name, observer: Observer, master=None):
         super().__init__(trackable_name, attribute_name, observer, tk.DoubleVar, master)
-        self.min, self.max = 0, 10
+        self.min, self.max = 0, 360
         self.sign = 1
 
     def create_widgets(self):
         widgets = super().create_widgets()
         widgets.append(tk.Entry(self, textvariable=self.widget_value))
-        widgets.append(tk.Scale(self, orient=tk.HORIZONTAL, variable=self.widget_value, to=10))
+        widgets.append(tk.Scale(self, orient=tk.HORIZONTAL, variable=self.widget_value, to=360))
         widgets.append(tk.Button(self, text="+/-", command=self.toggle_sign))
         return widgets
 
